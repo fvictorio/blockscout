@@ -4,26 +4,20 @@ import URI from 'urijs'
 import humps from 'humps'
 import socket from '../socket'
 import { updateAllAges } from '../lib/from_now'
-import { buildFullBlockList, initRedux, slideDownBefore, skippedBlockListBuilder } from '../utils'
+import { buildFullBlockList, initRedux, slideDownBefore, skippedBlockListBuilder, listMorph } from '../utils'
 
 export const initialState = {
-  blockNumbers: [],
   beyondPageOne: null,
   channelDisconnected: false,
-  newBlock: null,
-  replaceBlock: null,
-  skippedBlockNumbers: []
+  blocks: []
 }
 
 export function reducer (state = initialState, action) {
   switch (action.type) {
     case 'PAGE_LOAD': {
-      const blockNumbers = buildFullBlockList(action.blockNumbers)
-      const skippedBlockNumbers = _.difference(blockNumbers, action.blockNumbers)
       return Object.assign({}, state, {
         beyondPageOne: action.beyondPageOne,
-        blockNumbers,
-        skippedBlockNumbers
+        blocks: action.blocks
       })
     }
     case 'CHANNEL_DISCONNECTED': {
@@ -34,32 +28,12 @@ export function reducer (state = initialState, action) {
     case 'RECEIVED_NEW_BLOCK': {
       if (state.channelDisconnected || state.beyondPageOne) return state
 
-      const blockNumber = parseInt(action.msg.blockNumber)
-      if (_.includes(state.blockNumbers, blockNumber)) {
-        return Object.assign({}, state, {
-          newBlock: action.msg.blockHtml,
-          replaceBlock: blockNumber,
-          skippedBlockNumbers: _.without(state.skippedBlockNumbers, blockNumber)
+      return Object.assign({}, state, {
+          blocks: [
+            action.msg,
+            ...state.blocks
+          ]
         })
-      } else if (blockNumber < _.last(state.blockNumbers)) {
-        return state
-      } else {
-        let skippedBlockNumbers = state.skippedBlockNumbers.slice(0)
-        if (blockNumber > state.blockNumbers[0] + 1) {
-          skippedBlockListBuilder(skippedBlockNumbers, blockNumber, state.blockNumbers[0])
-        }
-        const newBlockNumbers = _.chain([blockNumber])
-          .union(skippedBlockNumbers, state.blockNumbers)
-          .orderBy([], ['desc'])
-          .value()
-
-        return Object.assign({}, state, {
-          blockNumbers: newBlockNumbers,
-          newBlock: action.msg.blockHtml,
-          replaceBlock: null,
-          skippedBlockNumbers
-        })
-      }
     }
     default:
       return state
@@ -73,7 +47,10 @@ if ($blockListPage.length) {
       const state = store.dispatch({
         type: 'PAGE_LOAD',
         beyondPageOne: !!humps.camelizeKeys(URI(window.location).query(true)).blockNumber,
-        blockNumbers: $('[data-selector="block-number"]').map((index, el) => parseInt(el.innerText)).toArray()
+        blocks: $('[data-selector="block-tile"]').map((index, el) => ({
+          blockNumber: parseInt(el.dataset.blockNumber),
+          blockHtml: el.outerHTML
+        })).toArray()
       })
       if (!state.beyondPageOne) {
         const blocksChannel = socket.channel(`blocks:new_block`, {})
@@ -86,24 +63,14 @@ if ($blockListPage.length) {
     },
     render (state, oldState) {
       const $channelDisconnected = $('[data-selector="channel-disconnected-message"]')
-      const skippedBlockNumbers = _.difference(state.skippedBlockNumbers, oldState.skippedBlockNumbers)
+      const $blocksList = $('[data-selector="blocks-list"]')
 
       if (state.channelDisconnected) $channelDisconnected.show()
-      if ((state.newBlock && oldState.newBlock !== state.newBlock) || skippedBlockNumbers.length) {
-        if (state.replaceBlock && oldState.replaceBlock !== state.replaceBlock) {
-          const $replaceBlock = $(`[data-block-number="${state.replaceBlock}"]`)
-          $replaceBlock.addClass('shrink-out')
-          setTimeout(() => $replaceBlock.replaceWith(state.newBlock), 400)
-        } else {
-          if (skippedBlockNumbers.length) {
-            _.forEachRight(skippedBlockNumbers, (skippedBlockNumber) => {
-              slideDownBefore($(`[data-block-number="${skippedBlockNumber - 1}"]`), placeHolderBlock(skippedBlockNumber))
-            })
-          }
-          slideDownBefore($(`[data-block-number="${state.blockNumbers[0] - 1}"]`), state.newBlock)
-        }
-        updateAllAges()
-      }
+
+      const oldElements = $blocksList.find('[data-selector="block-tile"]').get()
+      const newElements = _.map(state.blocks, 'blockHtml').map((el) => $(el)[0])
+
+      listMorph(oldElements, newElements, { key: 'dataset.blockNumber' })
     }
   })
 }
